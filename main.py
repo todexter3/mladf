@@ -55,12 +55,13 @@ def main():
     parser.add_argument('--clip_eps', type=float, default=config.get('clip_eps', 0.2))
     parser.add_argument('--batch_size', type=int, default=config.get('batch_size', 64))
     parser.add_argument('--n_epochs', type=int, default=config.get('n_epochs', 10))
+    parser.add_argument('--ppo_epochs', type=int, default=config.get('ppo_epochs', 10))
     parser.add_argument('--buffer_size', type=int, default=config.get('buffer_size', 1024))
     parser.add_argument('--hidden_dim', type=int, default=config.get('hidden_dim', 128))
     parser.add_argument('--n_layers', type=int, default=config.get('n_layers', 2))
 
     parser.add_argument('--vf_coef', type=float, default=config.get('vf_coef', 0.95))
-    parser.add_argument('--ent_coef', type=float, default=config.get('ent_coef', 0.05))
+    parser.add_argument('--ent_coef', type=float, default=config.get('ent_coef', 0.3))
 
     parser.add_argument('--alpha_init', type=float, default=config.get('alpha_init', 10.0))
     parser.add_argument('--beta_init', type=float, default=config.get('beta_init', 10.0))
