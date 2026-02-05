@@ -103,7 +103,7 @@ class PPOAgent:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # Optimization
-        for _ in range(self.args.n_epochs):
+        for _ in range(self.args.ppo_epochs):
             logps, entropy, values = self.net.evaluate(states, actions)
             values = values.squeeze(-1)
 
@@ -131,3 +131,9 @@ class PPOAgent:
             self.optimizer.step()
 
         self.buffer.clear()
+
+        return {
+            'loss': loss.item(),
+            'value_loss': value_loss.item(),
+            'entropy': entropy_loss.item()
+        }
