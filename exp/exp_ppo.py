@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from envs.trading_envs import TimingEnv
 from agents.agent import PPOAgent
 from data_loader.data_loader import load_multi_asset_data
+import logging
 
 class Exp_PPO:
     def __init__(self, args):
@@ -14,19 +15,33 @@ class Exp_PPO:
         
         # --- 修改 1: 按日期切分数据，确保不打断资产对齐 ---
         unique_dates = sorted(self.data['date'].unique())
-        split_date = unique_dates[int(len(unique_dates) * 0.8)]
-        
-        train_data = self.data[self.data['date'] < split_date].copy()
-        test_data = self.data[self.data['date'] >= split_date].copy()
+
+        n = len(unique_dates)
+        train_end = unique_dates[int(n * 0.65)]
+        eval_end  = unique_dates[int(n * 0.8)]
+
+        train_data = self.data[self.data['date'] < train_end].copy()
+        eval_data  = self.data[(self.data['date'] >= train_end) &(self.data['date'] < eval_end)].copy()
+        test_data  = self.data[self.data['date'] >= eval_end].copy()
+
         
         self.train_env = TimingEnv(train_data, args)
         self.test_env = TimingEnv(test_data, args)
+        self.eval_env = TimingEnv(eval_data, args)
         
         sample_obs = self.train_env.reset()
         # agent 内部会自动根据 state_dim 初始化 ActorCritic
         self.agent = PPOAgent(len(sample_obs), args)
 
+
+        self.train_rewards = []
+        self.train_losses = []
+        self.train_value_losses = []
+        self.train_entropies = []
+
     def train(self):
+        best_eval_reward = -np.inf
+
         for ep in range(self.args.n_epochs):
             state = self.train_env.reset()
             ep_reward = 0
@@ -36,19 +51,63 @@ class Exp_PPO:
                 action, logp, val = self.agent.select_action(state)
                 next_state, reward, done, info = self.train_env.step(action)
                 
-                # 修改 2: 确保存储的是 numpy 格式的动作向量
+                
                 self.agent.store_transition((state, action, reward, done, logp, val))
                 state = next_state
-                ep_reward += reward
+                ep_reward += reward  
                 
                 if len(self.agent.buffer) >= self.args.buffer_size:
-                    self.agent.update()
-            
-            print(f"Epoch: {ep} | Train Reward: {ep_reward:.4f}")
-            torch.save(self.agent.net.state_dict(), os.path.join(self.args.checkpoints, 'latest.pth'))
+                    loss_info=self.agent.update()
+
+                    if loss_info is not None:
+                        self.train_losses.append(loss_info.get('loss', np.nan))
+                        self.train_value_losses.append(loss_info.get('value_loss', np.nan))
+                        self.train_entropies.append(loss_info.get('entropy', np.nan))
+
+            self.train_rewards.append(ep_reward)
+
+            eval_reward = self.evaluate_policy(self.eval_env)
+
+            logging.info(
+                f"[Epoch {ep:03d}] "
+                f"TrainReward={ep_reward:.4f} | "
+                f"EvalReward={eval_reward:.4f} | "
+                f"Loss={self.train_losses[-1] if self.train_losses else 'NA'}"
+            )
+
+            torch.save(
+                {
+                    "model": self.agent.net.state_dict(),
+                    "optimizer": self.agent.optimizer.state_dict(),
+                    "epoch": ep,
+                    "eval_reward": eval_reward,
+                },
+                os.path.join(self.args.checkpoints, "latest.pth")
+            )
+
+            if eval_reward > best_eval_reward:
+                best_eval_reward = eval_reward
+
+                torch.save(
+                    {
+                        "model": self.agent.net.state_dict(),
+                        "optimizer": self.agent.optimizer.state_dict(),
+                        "epoch": ep,
+                        "eval_reward": eval_reward,
+                    },
+                    os.path.join(self.args.checkpoints, "best.pth")
+                )
+
+                logging.info(
+                    f"New best model saved! EvalReward={best_eval_reward:.4f}"
+                )
+
+        self.plot_training_curves()
 
     def test(self):
-        self.agent.net.load_state_dict(torch.load(os.path.join(self.args.checkpoints, 'latest.pth')))
+        ckpt = torch.load(os.path.join(self.args.checkpoints, "best.pth"),map_location=self.args.device)
+        self.agent.net.load_state_dict(ckpt["model"])
+        
         state = self.test_env.reset()
         done = False
         
@@ -74,8 +133,9 @@ class Exp_PPO:
         # 假设每个 info 里都有 'raw_rets' (需要在 Env.step 的 info 字典里加上这一行)
         # 如果不想改 Env，可以通过 res_df['pos'] 和 pnl 逆推，但建议直接改 Env 
         # 这里假设你已经在 Env.step 的 info 中添加了 info['raw_rets'] = next_rets
-        raw_rets_matrix = np.stack([res['raw_rets'] for res in results]) # (T, n_assets)
+        raw_rets_matrix = np.stack([res['raw_rets'] for res in results])  # (T, n_assets)
         pos_matrix = np.stack([res['pos'] for res in results])
+        
 
         n_assets = self.test_env.n_assets
         fixed_weight = 1.0 / n_assets
@@ -163,75 +223,62 @@ class Exp_PPO:
         plt.tight_layout()
         plt.savefig(os.path.join(self.args.res_path, 'detailed_analysis.png'))
         plt.show()
-    '''
-    def test(self):
-        # ... 加载模型逻辑保持不变 ...
-        self.agent.net.load_state_dict(torch.load(os.path.join(self.args.checkpoints, 'latest.pth')))
-        state = self.test_env.reset()
-        done = False
-        
-        results = []
-        while not done:
-            action, _, _ = self.agent.select_action(state, deterministic=True)
-            next_state, reward, done, info = self.test_env.step(action)
-            # info 里面现在包含了 'pos' (数组) 和 'agent_ret' 等
-            results.append(info)
-            state = next_state
-        
-        res_df = pd.DataFrame(results)
-        # 计算各项指标
-        res_df['excess_ret'] = res_df['agent_ret'] - res_df['bench_ret']
-        res_df['cum_agent'] = (1 + res_df['agent_ret']).cumprod()
-        res_df['cum_bench'] = (1 + res_df['bench_ret']).cumprod()
-        res_df['cum_excess'] = res_df['excess_ret'].cumsum()
-        
-        res_df.to_csv(os.path.join(self.args.res_path, 'test_results.csv'))
-        
-        # --- 修改 3: 可视化部分 ---
-        # --- 修改 3: 可视化部分 ---
-        plt.figure(figsize=(12, 22)) # 稍微增加高度以容纳更多子图
 
-        # 1. 累计收益图
-        plt.subplot(4, 1, 1)
-        plt.plot(res_df['cum_agent'], label='Multi-Asset Strategy', color='red')
-        plt.plot(res_df['cum_bench'], label='Benchmark (Equal Weight)', color='blue', linestyle='--')
-        plt.title('Cumulative Returns')
-        plt.legend(); plt.grid(True)
+    def plot_training_curves(self):
+        save_path = os.path.join(self.args.res_path, 'training_curves.png')
 
-        # 2. Alpha 曲线
-        plt.subplot(4, 1, 2)
-        plt.plot(res_df['cum_excess'], label='Cumulative Excess Return', color='black')
-        plt.fill_between(res_df.index, res_df['cum_excess'], 0, alpha=0.2, color='gray')
-        plt.title('Alpha Curve')
-        plt.legend(); plt.grid(True)
+        fig, axes = plt.subplots(4, 1, figsize=(12, 16), sharex=True)
 
-        # 3. 资产仓位堆叠图 (Area Chart)
-        plt.subplot(4, 1, 3)
-        pos_array = np.stack(res_df['pos'].values)  # shape: (T, n_assets)
-        cash_array = 1.0 - np.sum(pos_array, axis=1) # 计算现金部分
-        
-        # 准备堆叠数据：资产1, 资产2, ..., 资产N, 现金
-        labels = [f'Asset {a}' for a in self.test_env.assets] + ['CASH']
-        stack_data = np.column_stack([pos_array, cash_array])
-        
-        # 使用 stackplot 绘制堆叠面积图，能直观看出权重分配
-        plt.stackplot(res_df.index, stack_data.T, labels=labels, alpha=0.8)
-        plt.title('Portfolio Composition Over Time (Stacked)')
-        plt.ylabel('Weight')
-        plt.legend(loc='upper left', bbox_to_anchor=(1, 1)) # 将图例放到外面防止挡住曲线
-        plt.grid(True, alpha=0.3)
+        axes[0].plot(self.train_rewards, label='Episode Reward')
+        axes[0].set_title('Training Reward')
+        axes[0].legend(); axes[0].grid(True)
 
-        # 4. 现金流水平图 (单独观察现金仓位变化)
-        plt.subplot(4, 1, 4)
-        plt.plot(res_df.index, cash_array, label='Cash Weight (Idle Funds)', color='green', linewidth=2)
-        plt.fill_between(res_df.index, cash_array, 0, color='green', alpha=0.1)
-        plt.axhline(y=0.5, color='r', linestyle='--', alpha=0.3) # 参考线
-        plt.title('Cash Position (Market Avoidance)')
-        plt.ylim(-0.05, 1.05)
-        plt.legend(); plt.grid(True)
+        if len(self.train_losses) > 0:
+            axes[1].plot(self.train_losses, label='Policy Loss')
+            axes[1].set_title('Policy Loss')
+            axes[1].legend(); axes[1].grid(True)
+
+        if len(self.train_value_losses) > 0:
+            axes[2].plot(self.train_value_losses, label='Value Loss')
+            axes[2].set_title('Value Loss')
+            axes[2].legend(); axes[2].grid(True)
+
+        if len(self.train_entropies) > 0:
+            axes[3].plot(self.train_entropies, label='Entropy')
+            axes[3].set_title('Policy Entropy')
+            axes[3].legend(); axes[3].grid(True)
+
+        axes[-1].set_xlabel('Update Step / Epoch')
 
         plt.tight_layout()
-        plt.savefig(os.path.join(self.args.res_path, 'performance_analysis.png'))
+        plt.savefig(save_path)
         plt.close()
-        
-    '''
+
+        logging.info(f"Training curves saved to {save_path}")
+
+    def evaluate_policy(self, env, n_episodes=1):
+        """
+        Run policy in eval mode, without gradient or buffer update.
+        Return average episode reward.
+        """
+        self.agent.net.eval()
+
+        total_reward = 0.0
+
+        with torch.no_grad():
+            for _ in range(n_episodes):
+                state = env.reset()
+                done = False
+                ep_reward = 0.0
+
+                while not done:
+                    action, _, _ = self.agent.select_action(
+                        state, deterministic=True
+                    )
+                    state, reward, done, info = env.step(action)
+                    ep_reward += reward
+
+                total_reward += ep_reward
+
+        self.agent.net.train()
+        return total_reward / n_episodes
