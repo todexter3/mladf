@@ -12,6 +12,9 @@ class Exp_PPO:
     def __init__(self, args):
         self.args = args
         self.data = load_multi_asset_data(args.data_path)
+
+        self.all_assets = sorted(self.data['asset'].unique()) 
+        self.args.n_assets = len(self.all_assets)
         
         # --- 修改 1: 按日期切分数据，确保不打断资产对齐 ---
         unique_dates = sorted(self.data['date'].unique())
@@ -24,10 +27,14 @@ class Exp_PPO:
         eval_data  = self.data[(self.data['date'] >= train_end) &(self.data['date'] < eval_end)].copy()
         test_data  = self.data[self.data['date'] >= eval_end].copy()
 
-        
+        '''
         self.train_env = TimingEnv(train_data, args)
         self.test_env = TimingEnv(test_data, args)
         self.eval_env = TimingEnv(eval_data, args)
+        '''
+        self.train_env = TimingEnv(train_data, args, all_assets=self.all_assets)
+        self.eval_env  = TimingEnv(eval_data, args, all_assets=self.all_assets)
+        self.test_env  = TimingEnv(test_data, args, all_assets=self.all_assets)
         
         sample_obs = self.train_env.reset()
         # agent 内部会自动根据 state_dim 初始化 ActorCritic
@@ -40,6 +47,15 @@ class Exp_PPO:
         self.train_entropies = []
 
     def train(self):
+
+        s_train = self.train_env.reset()
+        s_eval  = self.eval_env.reset()
+        s_test  = self.test_env.reset()
+
+        print("Train state dim:", s_train.shape)
+        print("Eval  state dim:", s_eval.shape)
+        print("Test  state dim:", s_test.shape)
+
         best_eval_reward = -np.inf
 
         for ep in range(self.args.n_epochs):
