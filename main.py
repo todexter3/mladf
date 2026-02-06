@@ -30,7 +30,7 @@ def main():
     parser = argparse.ArgumentParser(description='PPO for ZZ500 Timing')
     
     # 1. 基础路径配置
-    parser.add_argument('--data_path', type=str, default='./data/mult_asset.csv', help='数据文件路径')
+    parser.add_argument('--data_path', type=str, default='/cpfs/dss/dev/gzyu/RL_Optimization_of_asset_strategies/RL_mult_asset/data/daily_2010_2024pricemain_cta.feather', help='数据文件路径')
     parser.add_argument('--save_dir', type=str, default='./results_ent/', help='实验结果保存根目录')
     parser.add_argument('--exp_name', type=str, default='timing_v1', help='实验名称')
     
@@ -61,15 +61,15 @@ def main():
     parser.add_argument('--n_layers', type=int, default=config.get('n_layers', 2))
 
     parser.add_argument('--vf_coef', type=float, default=config.get('vf_coef', 0.95))
-    parser.add_argument('--ent_coef', type=float, default=config.get('ent_coef', 0.3))
+    parser.add_argument('--ent_coef', type=float, default=config.get('ent_coef', 0.03))
 
     parser.add_argument('--alpha_init', type=float, default=config.get('alpha_init', 10.0))
     parser.add_argument('--beta_init', type=float, default=config.get('beta_init', 10.0))
     parser.add_argument('--window_size', type=int, default=config.get('window_size', 20))
     parser.add_argument('--risk_beta', type=float, default=config.get('risk_beta', 0.2))
 
-    parser.add_argument('--n_assets', type=int, default=config.get('n_assets', 3))
-    
+    parser.add_argument('--n_assets', type=int, default=config.get('n_assets', 66))
+    parser.add_argument('--feature_dim', type=int, default=config.get('feature_dim', 9))
 
     parser.add_argument('--use_gpu', type=bool, default=True, help='是否使用 GPU')
     parser.add_argument('--gpu', type=int, default=0, help='GPU 设备 ID')
@@ -95,11 +95,11 @@ def main():
 
     for args.lr in [0.0001,0.00003,0.00001]:
         for args.batch_size in [64,80,96]:
-            for args.buffer_size in [512,1024,256]:
-                for args.hidden_dim in [128,256,512]:
-                    for args.e_layers in [2,3,4]:
+            #for args.buffer_size in [512,1024,256]:
+                #for args.hidden_dim in [128,256,512]:
+                    #for args.n_layers in [2,3,4]:
                         
-                        exp_des = f"lr{args.lr}_batch{args.batch_size}_buffer{args.buffer_size}_hidden{args.hidden_dim}_layers{args.e_layers}"
+                        exp_des = f"lr{args.lr}_batch{args.batch_size}_buffer{args.buffer_size}_hidden{args.hidden_dim}_layers{args.n_layers}"
                                         
 
                         args.res_path = os.path.join(args.save_dir, exp_des)
